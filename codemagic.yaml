@@ -1,0 +1,45 @@
+workflows:
+  ios-app-store:
+    name: CashMind iOS App Store
+    max_build_duration: 60
+    instance_type: mac_mini_m2
+    integrations:
+      app_store_connect: CashMind API Key
+    environment:
+      xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.cashmind.app
+      vars:
+        XCODE_SCHEME: "CashMind"
+        BUNDLE_ID: "com.cashmind.app"
+    scripts:
+      - name: Install XcodeGen
+        script: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+      - name: Generate Xcode project
+        script: |
+          cd "$CM_BUILD_DIR"
+          xcodegen generate
+      - name: Set up code signing
+        script: xcode-project use-profiles
+      - name: Increment build number
+        script: |
+          cd "$CM_BUILD_DIR"
+          LATEST_RAW=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID" 2>/dev/null || echo "")
+          LATEST_BUILD=$(echo "$LATEST_RAW" | grep -o '[0-9]*' | tail -1)
+          LATEST_BUILD=${LATEST_BUILD:-0}
+          NEW_BUILD=$((LATEST_BUILD + 1))
+          echo "Build: $LATEST_BUILD → $NEW_BUILD"
+          agvtool new-version -all "$NEW_BUILD"
+      - name: Build IPA
+        script: |
+          xcode-project build-ipa \
+            --project "$CM_BUILD_DIR/CashMind.xcodeproj" \
+            --scheme "$XCODE_SCHEME"
+    artifacts:
+      - build/ios/ipa/*.ipa
+      - /tmp/xcodebuild_logs/*.log
+    publishing:
+      app_store_connect:
+        auth: integration
+        submit_to_testflight: true

@@ -1,0 +1,35 @@
+# Xcode generated project (XcodeGen regenerates)
+*.xcodeproj/
+*.xcworkspace/
+
+# Build
+build/
+DerivedData/
+*.ipa
+*.dSYM.zip
+*.dSYM
+
+# Xcode user data
+xcuserdata/
+*.xcuserstate
+*.xcscmblueprint
+*.xccheckout
+*.pbxuser
+*.mode1v3
+*.mode2v3
+*.perspectivev3
+
+# Swift Package Manager
+.build/
+.swiftpm/
+Package.resolved
+
+# CocoaPods
+Pods/
+Podfile.lock
+
+# OS
+.DS_Store
+*.swp
+*~
+Thumbs.db
