@@ -1,4 +1,5 @@
 workflows:
+  # === Read-only diagnostic (запустить при необходимости) ===
   diagnose-signing:
     name: Diagnose Signing (read-only)
     max_build_duration: 10
@@ -9,41 +10,20 @@ workflows:
       - name: List all distribution certificates with details
         script: |
           echo "=== ALL DISTRIBUTION CERTIFICATES ==="
-          app-store-connect certificates list \
-            --certificate-type DISTRIBUTION \
-            --json | python3 -m json.tool || true
+          app-store-connect certificates list --certificate-type DISTRIBUTION --json | python3 -m json.tool || true
           echo ""
           echo "=== LEGACY iOS DISTRIBUTION CERTIFICATES ==="
-          app-store-connect certificates list \
-            --certificate-type IOS_DISTRIBUTION \
-            --json | python3 -m json.tool || true
+          app-store-connect certificates list --certificate-type IOS_DISTRIBUTION --json | python3 -m json.tool || true
       - name: List provisioning profiles for Telomer
         script: |
           echo "=== TELOMER PROVISIONING PROFILES ==="
-          app-store-connect profiles list \
-            --bundle-id-identifier com.telomer.app \
-            --profile-type IOS_APP_STORE \
-            --json | python3 -m json.tool || true
+          app-store-connect profiles list --bundle-id-identifier com.telomer.app --profile-type IOS_APP_STORE --json | python3 -m json.tool || true
       - name: List provisioning profiles for CashMind
         script: |
           echo "=== CASHMIND PROVISIONING PROFILES ==="
-          app-store-connect profiles list \
-            --bundle-id-identifier com.cashmind.app \
-            --profile-type IOS_APP_STORE \
-            --json | python3 -m json.tool || true
-      - name: Cross-reference Telomer profile → cert
-        script: |
-          echo "=== Который CERT используется TELOMER ==="
-          # Profile ID → fetch внутри какой certificate привязан
-          PROFILE_IDS=$(app-store-connect profiles list \
-            --bundle-id-identifier com.telomer.app \
-            --profile-type IOS_APP_STORE \
-            --json | python3 -c "import sys,json; [print(p['id']) for p in json.load(sys.stdin)]" 2>/dev/null || true)
-          for pid in $PROFILE_IDS; do
-            echo "--- Profile $pid ---"
-            app-store-connect profiles get "$pid" --json | python3 -m json.tool || true
-          done
+          app-store-connect profiles list --bundle-id-identifier com.cashmind.app --profile-type IOS_APP_STORE --json | python3 -m json.tool || true
 
+  # === Production workflow — повторяем подход Telomer (multi-app shared cert) ===
   ios-app-store:
     name: CashMind iOS App Store
     max_build_duration: 60
@@ -52,6 +32,14 @@ workflows:
       app_store_connect: cashminds
     environment:
       xcode: latest
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.cashmind.app
+      # ★ Подключаем тот же variable group что использует Telomer.
+      # В нём хранится shared Apple Distribution P12 cert + private key,
+      # что позволяет переиспользовать один cert для всех iOS приложений.
+      groups:
+        - default
       vars:
         XCODE_SCHEME: "CashMind"
         BUNDLE_ID: "com.cashmind.app"
@@ -65,50 +53,19 @@ workflows:
           cd "$CM_BUILD_DIR"
           xcodegen generate
 
-      - name: Initialize keychain
-        script: keychain initialize
-
-      - name: Generate certificate private key
+      - name: Set up code signing
         script: |
-          # Apple Distribution Certificate требует приватный ключ при создании через API.
-          # RSA 2048 — стандарт для Apple distribution. Codemagic CLI читает его
-          # из env var CERTIFICATE_PRIVATE_KEY (новая версия CLI без --certificate-key-path флага).
-          openssl genrsa 2048 > /tmp/cashmind_priv.pem
-          echo "CERTIFICATE_PRIVATE_KEY=$(cat /tmp/cashmind_priv.pem | base64 | tr -d '\n')" >> $CM_ENV
-          echo "Private key generated and exported to CERTIFICATE_PRIVATE_KEY env."
-
-      - name: Fetch / create signing files for main app
-        script: |
-          # Расшифруем base64 обратно перед использованием
-          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
-          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
-
-      - name: Fetch / create signing files for widget extension
-        script: |
-          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
-          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
-          app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
-            --type IOS_APP_STORE \
-            --create
-
-      - name: Install certificates into keychain
-        script: |
-          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
-          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
-          keychain add-certificates
-
-      - name: Apply provisioning profiles
-        script: xcode-project use-profiles
+          # Использует existing cert из group 'default' + автоматически создаёт/обновляет profiles
+          # для всех bundle IDs в Xcode project (main app + widget).
+          # Никаких новых certificates не создаётся.
+          xcode-project use-profiles
 
       - name: Increment build number
         script: |
           cd "$CM_BUILD_DIR"
           LATEST_RAW=$(app-store-connect get-latest-testflight-build-number "$APP_APPLE_ID" 2>/dev/null || echo "")
           LATEST_BUILD=$(echo "$LATEST_RAW" | grep -o '[0-9]*' | tail -1)
-          LATEST_BUILD=${LATEST_BUILD:-0}
+          LATEST_BUILD=${LATEST_BUILD:-1}
           NEW_BUILD=$((LATEST_BUILD + 1))
           echo "Build: $LATEST_BUILD -> $NEW_BUILD"
           agvtool new-version -all "$NEW_BUILD"
@@ -127,3 +84,9 @@ workflows:
       app_store_connect:
         auth: integration
         submit_to_testflight: true
+      email:
+        recipients:
+          - parsadanovamm@gmail.com
+        notify:
+          success: true
+          failure: true
