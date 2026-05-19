@@ -23,7 +23,12 @@ workflows:
           echo "=== CASHMIND PROVISIONING PROFILES ==="
           app-store-connect profiles list --bundle-id-identifier com.cashmind.app --profile-type IOS_APP_STORE --json | python3 -m json.tool || true
 
-  # === Production workflow — shared cert через group, profiles создаются через API ===
+  # === Production workflow — повторяет Telomer pattern ===
+  # Pre-requisites:
+  # - Apple Distribution Cert уже существует (shared с Telomer)
+  # - Provisioning profiles созданы вручную в Apple Developer Portal:
+  #     • "CashMind App Store" → com.cashmind.app
+  #     • "CashMind Widget App Store" → com.cashmind.app.widget
   ios-app-store:
     name: CashMind iOS App Store
     max_build_duration: 60
@@ -32,9 +37,10 @@ workflows:
       app_store_connect: cashminds
     environment:
       xcode: latest
-      # ★ Подключаем тот же variable group что использует Telomer.
-      # В нём хранится shared Apple Distribution P12 cert + private key,
-      # что позволяет переиспользовать один cert для всех iOS приложений.
+      ios_signing:
+        distribution_type: app_store
+        bundle_identifier: com.cashmind.app
+      # ★ Тот же variable group что Telomer — Codemagic-Team-managed shared signing.
       groups:
         - default
       vars:
@@ -50,30 +56,7 @@ workflows:
           cd "$CM_BUILD_DIR"
           xcodegen generate
 
-      - name: Initialize keychain
-        script: keychain initialize
-
-      - name: Import shared Distribution certificate from 'default' group into keychain
-        script: |
-          # Codemagic группа 'default' содержит cert + private key (см. Telomer setup).
-          # keychain add-certificates подхватывает их из env vars автоматически.
-          keychain add-certificates
-
-      - name: Create provisioning profile for main app (reuses existing cert)
-        script: |
-          # БЕЗ --create команда создаст profile только если найдёт существующий cert
-          # в keychain. Существующий cert НЕ воссоздаётся, новый cert тоже не создаётся.
-          app-store-connect fetch-signing-files "$BUNDLE_ID" \
-            --type IOS_APP_STORE \
-            --create
-
-      - name: Create provisioning profile for widget extension
-        script: |
-          app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
-            --type IOS_APP_STORE \
-            --create
-
-      - name: Apply provisioning profiles to Xcode project
+      - name: Set up code signing
         script: xcode-project use-profiles
 
       - name: Increment build number
