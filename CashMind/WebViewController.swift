@@ -1,6 +1,7 @@
 import UIKit
 import WebKit
 import Network
+import UserNotifications
 
 final class WebViewController: UIViewController {
 
@@ -23,6 +24,72 @@ final class WebViewController: UIViewController {
         startNetworkMonitor()
         loadApp()
         showAIDisclosureIfNeeded()
+        setupNotifications()
+    }
+
+    // MARK: - Local Notifications (engagement + deadlines + budget alerts)
+
+    private func setupNotifications() {
+        let center = UNUserNotificationCenter.current()
+        // Запрос разрешения. Если отказ — все last_open и schedule просто игнорируются OS.
+        center.requestAuthorization(options: [.alert, .sound, .badge]) { granted, _ in
+            DispatchQueue.main.async {
+                if granted { self.scheduleEngagementReminder() }
+            }
+        }
+        // Обновляем last_open при каждом запуске
+        UserDefaults.standard.set(Date(), forKey: "dn_last_open")
+    }
+
+    /// Engagement notification: если юзер 3 дня не открывал — напомнить
+    private func scheduleEngagementReminder() {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: ["dn_engagement"])
+        let isRu = (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("ru")
+        let content = UNMutableNotificationContent()
+        content.title = "CashMind"
+        content.body = isRu
+            ? "Вы давно не вели учёт — проверьте баланс и обновите данные."
+            : "It's been a while — check your balance and update your records."
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3 * 86400, repeats: false)
+        center.add(UNNotificationRequest(identifier: "dn_engagement", content: content, trigger: trigger))
+    }
+
+    /// Расписать уведомление на день перед deadline в 10:00 локального времени
+    private func scheduleDeadline(id: String, title: String, body: String, dateISO: String) {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        guard let date = formatter.date(from: dateISO) ?? ISO8601DateFormatter().date(from: dateISO + "T00:00:00Z") else { return }
+        let cal = Calendar.current
+        let dayBefore = cal.date(byAdding: .day, value: -1, to: date) ?? date
+        guard let triggerDate = cal.date(bySettingHour: 10, minute: 0, second: 0, of: dayBefore),
+              triggerDate > Date() else { return }
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        let content = UNMutableNotificationContent()
+        content.title = title
+        content.body = body
+        content.sound = .default
+        let comps = cal.dateComponents([.year, .month, .day, .hour, .minute], from: triggerDate)
+        let trigger = UNCalendarNotificationTrigger(dateMatching: comps, repeats: false)
+        center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+    }
+
+    /// Уведомление о превышении бюджета — единоразово, через 1 час
+    private func scheduleBudgetAlert(id: String, body: String) {
+        let center = UNUserNotificationCenter.current()
+        center.removePendingNotificationRequests(withIdentifiers: [id])
+        let content = UNMutableNotificationContent()
+        content.title = (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("ru") ? "Бюджет превышен" : "Budget exceeded"
+        content.body = body
+        content.sound = .default
+        let trigger = UNTimeIntervalNotificationTrigger(timeInterval: 3600, repeats: false)
+        center.add(UNNotificationRequest(identifier: id, content: content, trigger: trigger))
+    }
+
+    private func cancelNotification(id: String) {
+        UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: [id])
     }
 
     /// App Store Guideline 5.1.2(i) — обязательное раскрытие AI/третьих сторон
@@ -53,6 +120,11 @@ final class WebViewController: UIViewController {
         config.allowsInlineMediaPlayback = true
         config.websiteDataStore = .default()
         config.limitsNavigationsToAppBoundDomains = true
+
+        // Bridge для приёма команд от PWA: notifications scheduling
+        let userContentController = WKUserContentController()
+        userContentController.add(self, name: "cashmind")
+        config.userContentController = userContentController
 
         webView = WKWebView(frame: .zero, configuration: config)
         webView.translatesAutoresizingMaskIntoConstraints = false
@@ -305,6 +377,40 @@ extension WebViewController: WKUIDelegate {
             completionHandler(alert.textFields?.first?.text)
         })
         present(alert, animated: true)
+    }
+}
+
+// MARK: - WKScriptMessageHandler (PWA bridge)
+
+extension WebViewController: WKScriptMessageHandler {
+
+    func userContentController(_ ucc: WKUserContentController, didReceive message: WKScriptMessage) {
+        guard message.name == "cashmind",
+              let payload = message.body as? [String: Any],
+              let action = payload["action"] as? String else { return }
+
+        switch action {
+        case "schedule_deadline":
+            let id = payload["id"] as? String ?? UUID().uuidString
+            let title = payload["title"] as? String ?? "CashMind"
+            let body = payload["body"] as? String ?? ""
+            let dateISO = payload["date"] as? String ?? ""
+            scheduleDeadline(id: id, title: title, body: body, dateISO: dateISO)
+
+        case "schedule_budget":
+            let id = payload["id"] as? String ?? "dn_budget_alert"
+            let body = payload["body"] as? String ?? ""
+            scheduleBudgetAlert(id: id, body: body)
+
+        case "cancel":
+            if let id = payload["id"] as? String { cancelNotification(id: id) }
+
+        case "reset_engagement":
+            scheduleEngagementReminder()
+
+        default:
+            break
+        }
     }
 }
 
