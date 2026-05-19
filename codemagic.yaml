@@ -23,12 +23,10 @@ workflows:
           echo "=== CASHMIND PROVISIONING PROFILES ==="
           app-store-connect profiles list --bundle-id-identifier com.cashmind.app --profile-type IOS_APP_STORE --json | python3 -m json.tool || true
 
-  # === Production workflow — повторяет Telomer pattern ===
-  # Pre-requisites:
-  # - Apple Distribution Cert уже существует (shared с Telomer)
-  # - Provisioning profiles созданы вручную в Apple Developer Portal:
-  #     • "CashMind App Store" → com.cashmind.app
-  #     • "CashMind Widget App Store" → com.cashmind.app.widget
+  # === Production workflow ===
+  # Strategy: use LEGACY iOS_DISTRIBUTION cert type (0 в team — лимит свободен).
+  # Apple Distribution (modern) slot занят Telomer — не трогаем.
+  # iOS_DISTRIBUTION valid для App Store distribution точно так же.
   ios-app-store:
     name: CashMind iOS App Store
     max_build_duration: 60
@@ -37,12 +35,6 @@ workflows:
       app_store_connect: cashminds
     environment:
       xcode: latest
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.cashmind.app
-      # ★ Тот же variable group что Telomer — Codemagic-Team-managed shared signing.
-      groups:
-        - default
       vars:
         XCODE_SCHEME: "CashMind"
         BUNDLE_ID: "com.cashmind.app"
@@ -56,7 +48,42 @@ workflows:
           cd "$CM_BUILD_DIR"
           xcodegen generate
 
-      - name: Set up code signing
+      - name: Initialize keychain
+        script: keychain initialize
+
+      - name: Generate private key for legacy iOS Distribution cert
+        script: |
+          # Используем IOS_DISTRIBUTION (legacy) тип — у юзера их 0 в team.
+          # Apple позволит создать без 409 conflict.
+          openssl genrsa 2048 > /tmp/cashmind_priv.pem
+          PEM_B64=$(cat /tmp/cashmind_priv.pem | base64 | tr -d '\n')
+          echo "CERTIFICATE_PRIVATE_KEY=$PEM_B64" >> $CM_ENV
+
+      - name: Fetch / create iOS Distribution signing files for main app
+        script: |
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
+          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --certificate-type IOS_DISTRIBUTION \
+            --create
+
+      - name: Fetch / create iOS Distribution signing files for widget extension
+        script: |
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
+          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
+          app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
+            --type IOS_APP_STORE \
+            --certificate-type IOS_DISTRIBUTION \
+            --create
+
+      - name: Install certificates into keychain
+        script: |
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
+          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
+          keychain add-certificates
+
+      - name: Apply provisioning profiles to Xcode project
         script: xcode-project use-profiles
 
       - name: Increment build number
