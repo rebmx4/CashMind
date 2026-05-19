@@ -22,8 +22,20 @@ workflows:
         script: |
           cd "$CM_BUILD_DIR"
           xcodegen generate
-      - name: Set up code signing
-        script: xcode-project use-profiles
+      - name: Fetch / create code signing assets via ASC API
+        script: |
+          cd "$CM_BUILD_DIR"
+          # Создаёт distribution cert + provisioning profiles ДЛЯ ВСЕХ bundle IDs если их нет
+          app-store-connect fetch-signing-files "$BUNDLE_ID" \
+            --type IOS_APP_STORE \
+            --create
+          app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
+            --type IOS_APP_STORE \
+            --create
+          # Установить downloaded profiles + cert в keychain
+          keychain initialize
+          keychain add-certificates
+          xcode-project use-profiles
       - name: Increment build number
         script: |
           cd "$CM_BUILD_DIR"
