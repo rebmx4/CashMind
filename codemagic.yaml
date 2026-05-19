@@ -24,9 +24,10 @@ workflows:
           app-store-connect profiles list --bundle-id-identifier com.cashmind.app --profile-type IOS_APP_STORE --json | python3 -m json.tool || true
 
   # === Production workflow ===
-  # Strategy: use LEGACY iOS_DISTRIBUTION cert type (0 в team — лимит свободен).
-  # Apple Distribution (modern) slot занят Telomer — не трогаем.
-  # iOS_DISTRIBUTION valid для App Store distribution точно так же.
+  # Pre-requisite (one-time): revoke the unused Apple Distribution cert from
+  # Apple Developer Portal (the one Codemagic auto-created on earlier failed
+  # builds — it's not used by Telomer). After that the slot is free and
+  # fetch-signing-files --create will succeed.
   ios-app-store:
     name: CashMind iOS App Store
     max_build_duration: 60
@@ -51,30 +52,26 @@ workflows:
       - name: Initialize keychain
         script: keychain initialize
 
-      - name: Generate private key for legacy iOS Distribution cert
+      - name: Generate certificate private key
         script: |
-          # Используем IOS_DISTRIBUTION (legacy) тип — у юзера их 0 в team.
-          # Apple позволит создать без 409 conflict.
           openssl genrsa 2048 > /tmp/cashmind_priv.pem
           PEM_B64=$(cat /tmp/cashmind_priv.pem | base64 | tr -d '\n')
           echo "CERTIFICATE_PRIVATE_KEY=$PEM_B64" >> $CM_ENV
 
-      - name: Fetch / create iOS Distribution signing files for main app
+      - name: Fetch / create signing files for main app
         script: |
           echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
           export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --certificate-type IOS_DISTRIBUTION \
             --create
 
-      - name: Fetch / create iOS Distribution signing files for widget extension
+      - name: Fetch / create signing files for widget extension
         script: |
           echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
           export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
           app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
             --type IOS_APP_STORE \
-            --certificate-type IOS_DISTRIBUTION \
             --create
 
       - name: Install certificates into keychain
