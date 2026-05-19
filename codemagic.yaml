@@ -10,6 +10,8 @@ workflows:
       ios_signing:
         distribution_type: app_store
         bundle_identifier: com.cashmind.app
+        # Widget extension использует отдельный bundleId
+        # — Codemagic подтянет provisioning profile через App Store Connect API integration
       vars:
         XCODE_SCHEME: "CashMind"
         BUNDLE_ID: "com.cashmind.app"

@@ -22,6 +22,26 @@ final class WebViewController: UIViewController {
         setupProgressBar()
         startNetworkMonitor()
         loadApp()
+        showAIDisclosureIfNeeded()
+    }
+
+    /// App Store Guideline 5.1.2(i) — обязательное раскрытие AI/третьих сторон
+    /// перед началом обработки персональных данных. Показывается один раз.
+    private func showAIDisclosureIfNeeded() {
+        let key = "dn_ios_ai_disclosure_v1"
+        if UserDefaults.standard.bool(forKey: key) { return }
+        let isRu = (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("ru")
+        let title = isRu ? "AI и данные" : "AI & Your Data"
+        let body = isRu
+            ? "CashMind содержит AI‑советника на базе OpenAI GPT‑4o. Чтобы давать персональные ответы, AI получает доступ к вашим финансовым данным в приложении (счета, транзакции, бюджеты, цели, долги) и отправляет их в OpenAI API (США) при каждом сообщении.\n\nОтветы AI генерируются автоматически и могут быть неточными — не используйте их как замену консультации финансиста."
+            : "CashMind includes an AI advisor powered by OpenAI GPT‑4o. To provide personal advice, the AI accesses your in‑app financial data (accounts, transactions, budgets, goals, debts) and sends it to the OpenAI API (USA) with each message you send.\n\nAI responses are generated automatically and may be inaccurate — do not use them as a substitute for professional financial advice."
+        let alert = UIAlertController(title: title, message: body, preferredStyle: .alert)
+        alert.addAction(UIAlertAction(title: isRu ? "Понятно" : "I Understand", style: .default) { _ in
+            UserDefaults.standard.set(true, forKey: key)
+        })
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) { [weak self] in
+            self?.present(alert, animated: true)
+        }
     }
 
     override var preferredStatusBarStyle: UIStatusBarStyle { .lightContent }
@@ -153,17 +173,17 @@ final class WebViewController: UIViewController {
         icon.font = .systemFont(ofSize: 48)
 
         let title = UILabel()
-        title.text = "Нет подключения"
+        title.text = L10n.offlineTitle
         title.textColor = .white
         title.font = .systemFont(ofSize: 20, weight: .semibold)
 
         let subtitle = UILabel()
-        subtitle.text = "Проверьте интернет-соединение"
+        subtitle.text = L10n.offlineSubtitle
         subtitle.textColor = .gray
         subtitle.font = .systemFont(ofSize: 15)
 
         let btn = UIButton(type: .system)
-        btn.setTitle("Повторить", for: .normal)
+        btn.setTitle(L10n.offlineRetry, for: .normal)
         btn.tintColor = UIColor(red: 0.35, green: 0.55, blue: 1.0, alpha: 1)
         btn.titleLabel?.font = .systemFont(ofSize: 17, weight: .medium)
         btn.addTarget(self, action: #selector(retryTapped), for: .touchUpInside)
@@ -285,6 +305,23 @@ extension WebViewController: WKUIDelegate {
             completionHandler(alert.textFields?.first?.text)
         })
         present(alert, animated: true)
+    }
+}
+
+// MARK: - Localization
+
+enum L10n {
+    private static var isRu: Bool {
+        (Locale.preferredLanguages.first ?? "en").lowercased().hasPrefix("ru")
+    }
+    static var offlineTitle: String {
+        isRu ? "Нет подключения" : "No connection"
+    }
+    static var offlineSubtitle: String {
+        isRu ? "Проверьте интернет-соединение" : "Check your internet connection"
+    }
+    static var offlineRetry: String {
+        isRu ? "Повторить" : "Retry"
     }
 }
 
