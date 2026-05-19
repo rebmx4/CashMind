@@ -26,26 +26,34 @@ workflows:
       - name: Generate certificate private key
         script: |
           # Apple Distribution Certificate требует приватный ключ при создании через API.
-          # Генерируем RSA 2048 — стандарт для Apple distribution.
-          openssl genrsa -out /tmp/cashmind_priv.pem 2048
-          echo "Private key generated."
+          # RSA 2048 — стандарт для Apple distribution. Codemagic CLI читает его
+          # из env var CERTIFICATE_PRIVATE_KEY (новая версия CLI без --certificate-key-path флага).
+          openssl genrsa 2048 > /tmp/cashmind_priv.pem
+          echo "CERTIFICATE_PRIVATE_KEY=$(cat /tmp/cashmind_priv.pem | base64 | tr -d '\n')" >> $CM_ENV
+          echo "Private key generated and exported to CERTIFICATE_PRIVATE_KEY env."
 
       - name: Fetch / create signing files for main app
         script: |
+          # Расшифруем base64 обратно перед использованием
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
+          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
-            --certificate-key-path /tmp/cashmind_priv.pem \
             --create
 
       - name: Fetch / create signing files for widget extension
         script: |
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
+          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
           app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
             --type IOS_APP_STORE \
-            --certificate-key-path /tmp/cashmind_priv.pem \
             --create
 
       - name: Install certificates into keychain
-        script: keychain add-certificates --certificate-key-path /tmp/cashmind_priv.pem
+        script: |
+          echo "$CERTIFICATE_PRIVATE_KEY" | base64 -d > /tmp/priv.pem
+          export CERTIFICATE_PRIVATE_KEY=$(cat /tmp/priv.pem)
+          keychain add-certificates
 
       - name: Apply provisioning profiles
         script: xcode-project use-profiles
