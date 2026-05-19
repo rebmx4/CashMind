@@ -7,35 +7,40 @@ workflows:
       app_store_connect: CashMind API Key
     environment:
       xcode: latest
-      ios_signing:
-        distribution_type: app_store
-        bundle_identifier: com.cashmind.app
-        # Widget extension использует отдельный bundleId
-        # — Codemagic подтянет provisioning profile через App Store Connect API integration
       vars:
         XCODE_SCHEME: "CashMind"
         BUNDLE_ID: "com.cashmind.app"
+        APP_APPLE_ID: "6762206089"
     scripts:
       - name: Install XcodeGen
         script: HOMEBREW_NO_AUTO_UPDATE=1 brew install xcodegen
+
       - name: Generate Xcode project
         script: |
           cd "$CM_BUILD_DIR"
           xcodegen generate
-      - name: Fetch / create code signing assets via ASC API
+
+      - name: Initialize keychain
+        script: keychain initialize
+
+      - name: Fetch / create signing files for main app
         script: |
-          cd "$CM_BUILD_DIR"
-          # Создаёт distribution cert + provisioning profiles ДЛЯ ВСЕХ bundle IDs если их нет
           app-store-connect fetch-signing-files "$BUNDLE_ID" \
             --type IOS_APP_STORE \
             --create
+
+      - name: Fetch / create signing files for widget extension
+        script: |
           app-store-connect fetch-signing-files "${BUNDLE_ID}.widget" \
             --type IOS_APP_STORE \
             --create
-          # Установить downloaded profiles + cert в keychain
-          keychain initialize
-          keychain add-certificates
-          xcode-project use-profiles
+
+      - name: Install certificates into keychain
+        script: keychain add-certificates
+
+      - name: Apply provisioning profiles
+        script: xcode-project use-profiles
+
       - name: Increment build number
         script: |
           cd "$CM_BUILD_DIR"
@@ -43,16 +48,19 @@ workflows:
           LATEST_BUILD=$(echo "$LATEST_RAW" | grep -o '[0-9]*' | tail -1)
           LATEST_BUILD=${LATEST_BUILD:-0}
           NEW_BUILD=$((LATEST_BUILD + 1))
-          echo "Build: $LATEST_BUILD → $NEW_BUILD"
+          echo "Build: $LATEST_BUILD -> $NEW_BUILD"
           agvtool new-version -all "$NEW_BUILD"
+
       - name: Build IPA
         script: |
           xcode-project build-ipa \
             --project "$CM_BUILD_DIR/CashMind.xcodeproj" \
             --scheme "$XCODE_SCHEME"
+
     artifacts:
       - build/ios/ipa/*.ipa
       - /tmp/xcodebuild_logs/*.log
+
     publishing:
       app_store_connect:
         auth: integration
